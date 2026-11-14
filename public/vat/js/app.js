@@ -210,6 +210,23 @@ async function submitFile() {
   render();
 }
 
+async function submitNil() {
+  const u = state.upload;
+  if (u.status === 'submitting') return;
+  u.status = 'submitting';
+  u.error = '';
+  render();
+  try {
+    const r = await api.vatSubmitNil(uploadParams());
+    Object.assign(u, { status: 'done', doneId: r.id, replaced: false, nil: true, nilAsk: false, result: null });
+    loadClient();
+  } catch (e) {
+    u.status = 'idle';
+    u.error = e.message;
+  }
+  render();
+}
+
 async function downloadFile(id, kind) {
   try {
     const r = await api.vatDownload(id, kind);
@@ -268,7 +285,7 @@ root.addEventListener('submit', async (ev) => {
     ui.busy = true; ui.notice = null; render();
     try {
       const r = await api.vatCreateClient({ name: val(f, 'name'), ...(val(f, 'email') ? { email: val(f, 'email') } : {}) });
-      ui.notice = note(`${r.client.name} added.${r.invite === 'created' || r.invite === 'existing' ? ' They can sign in with an emailed code.' : r.invite === 'failed' ? ' The invitation could not be set up; add them below.' : ''}`);
+      ui.notice = note(`${r.client.name} added.${r.invite === 'created' || r.invite === 'existing' ? emailNote(r.emailed) : r.invite === 'failed' ? ' The invitation could not be set up; add them below.' : ''}`);
     } catch (e) { ui.notice = note(e.message, 'error'); }
     ui.busy = false;
     await loadStaff();
@@ -280,17 +297,32 @@ root.addEventListener('submit', async (ev) => {
       ui.notice = note('Filing added.');
     } catch (e) { ui.notice = note(e.message, 'error'); }
     await loadStaff();
+  } else if (f.dataset.form === 'invite') {
+    const ui = state.clientsUi;
+    ui.notice = null;
+    const email = val(f, 'email');
+    try {
+      await api.vatInvite({ tenantId: f.dataset.tenant, email });
+      ui.notice = note(`Welcome email sent to ${email}.`);
+    } catch (e) { ui.notice = note(e.message, 'error'); }
+    await loadStaff();
   } else if (f.dataset.form === 'access') {
     const ui = state.clientsUi;
     ui.notice = null;
     const email = val(f, 'email');
     try {
-      await api.staffAddUser({ tenantId: f.dataset.tenant, email, role: val(f, 'role') });
-      ui.notice = note(`Access given to ${email}. They can sign in with an emailed code.`);
+      const r = await api.staffAddUser({ tenantId: f.dataset.tenant, email, role: val(f, 'role'), welcome: true });
+      ui.notice = note(`Access given to ${email}.${emailNote(r.emailed)}`);
     } catch (e) { ui.notice = note(e.message, 'error'); }
     await loadStaff();
   }
 });
+
+function emailNote(emailed) {
+  if (emailed === 'sent') return ' We emailed them the portal link and instructions.';
+  if (emailed === 'failed') return ' The welcome email could not be sent; use "Resend welcome email" below, or send them the link yourself.';
+  return ' Welcome emails are not switched on yet, so send them the portal link yourself. They sign in with an emailed code.';
+}
 
 /** Refresh the lists behind the detail page without disturbing it. */
 function loadStaffOrClientQuiet() { reloadData(); }
@@ -298,8 +330,8 @@ function loadStaffOrClientQuiet() { reloadData(); }
 root.addEventListener('change', async (ev) => {
   const t = ev.target;
   if (t.id === 'tenant') return chooseTenant(t.value);
-  if (t.id === 'reg') { Object.assign(state.upload, { regId: t.value, period: null, file: null, result: null, status: 'idle', error: '' }); return render(); }
-  if (t.id === 'period') { Object.assign(state.upload, { period: t.value, file: null, result: null, status: 'idle', error: '' }); return render(); }
+  if (t.id === 'reg') { Object.assign(state.upload, { nilAsk: false, regId: t.value, period: null, file: null, result: null, status: 'idle', error: '' }); return render(); }
+  if (t.id === 'period') { Object.assign(state.upload, { nilAsk: false, period: t.value, file: null, result: null, status: 'idle', error: '' }); return render(); }
   if (t.id === 'file-input') { const file = t.files?.[0]; if (file) checkFile(file); return; }
   if (t.dataset.filter) { state.filter[t.dataset.filter] = t.value; return render(); }
   if (t.id === 'return-file') {
@@ -338,6 +370,9 @@ root.addEventListener('click', async (ev) => {
   else if (a === 'filter-country') { state.country = el.dataset.code; render(); }
   else if (a === 'start-upload') { state.view = 'upload'; state.upload = { ...freshUpload(), regId: el.dataset.reg, period: el.dataset.period }; render(); window.scrollTo?.(0, 0); }
   else if (a === 'submit-file') submitFile();
+  else if (a === 'ask-nil') { state.upload.nilAsk = true; state.upload.error = ''; render(); }
+  else if (a === 'cancel-nil') { state.upload.nilAsk = false; render(); }
+  else if (a === 'confirm-nil') submitNil();
   else if (a === 'upload-another') { state.upload = freshUpload(); render(); }
   else if (a === 'preview') {
     state.preview = { tenantId: el.dataset.tenant, name: el.dataset.name };

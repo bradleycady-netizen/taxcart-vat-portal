@@ -826,6 +826,74 @@ function intSetting(raw, fallback, min, max, name, problems) {
   return n;
 }
 
+// src/http/mailer.ts
+var DEFAULT_FROM = "Taxcart <portal@mail.taxcart.com.au>";
+var DEFAULT_REPLY_TO = "consulting@taxcart.com.au";
+var ResendMailer = class {
+  apiKey;
+  from;
+  replyTo;
+  fetchImpl;
+  constructor(apiKey, from, replyTo, fetchImpl) {
+    this.apiKey = apiKey;
+    this.from = from;
+    this.replyTo = replyTo;
+    this.fetchImpl = fetchImpl;
+  }
+  async send(mail) {
+    try {
+      const res = await this.fetchImpl("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: this.from, to: [mail.to], reply_to: this.replyTo, subject: mail.subject, text: mail.text, html: mail.html }),
+        signal: AbortSignal.timeout(8e3)
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+};
+function buildMailer(env, fetchImpl) {
+  if (env["INVITE_EMAILS_ENABLED"] !== "true") return void 0;
+  const key = env["RESEND_API_KEY"];
+  if (!key) return void 0;
+  return new ResendMailer(key, env["INVITE_FROM"] || DEFAULT_FROM, env["INVITE_REPLY_TO"] || DEFAULT_REPLY_TO, fetchImpl);
+}
+function portalUrl(env, firstOrigin) {
+  const set = env["PORTAL_URL"];
+  if (set) {
+    try {
+      return new URL(set).toString();
+    } catch {
+    }
+  }
+  return `${firstOrigin}/vat/`;
+}
+var escHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function welcomeEmail(p) {
+  const subject = "Welcome to the Taxcart VAT portal";
+  const text = [
+    `Welcome to Taxcart.`,
+    ``,
+    `Your VAT portal for ${p.clientName} is ready. This is where you send us your sales files and follow each VAT return from start to finish.`,
+    ``,
+    `To get started:`,
+    `1. Open ${p.portalUrl}`,
+    `2. Enter this email address (${p.to}) and ask for a sign-in code.`,
+    `3. We email you a 6-digit code. Type it in to sign in. There is no password to remember.`,
+    `4. Choose your filing and period, add your sales file (CSV or Excel), check it, and send it to us.`,
+    ``,
+    `Please use this exact email address to sign in. A different address will not see your company.`,
+    ``,
+    `Questions? Reply to this email or write to ${p.contact}.`,
+    ``,
+    `The Taxcart team`
+  ].join("\n");
+  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#EAF1FE;font-family:Arial,Helvetica,sans-serif;color:#0B1F4D"><div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:28px"><h1 style="font-size:20px;margin:0 0 12px">Welcome to Taxcart</h1><p style="line-height:1.5">Your VAT portal for <strong>${escHtml(p.clientName)}</strong> is ready. This is where you send us your sales files and follow each VAT return from start to finish.</p><ol style="line-height:1.6;padding-left:20px"><li>Open the portal below.</li><li>Enter this email address (<strong>${escHtml(p.to)}</strong>) and ask for a sign-in code.</li><li>We email you a 6-digit code. Type it in. There is no password to remember.</li><li>Choose your filing and period, add your sales file (CSV or Excel), check it, and send it to us.</li></ol><p style="margin:22px 0"><a href="${escHtml(p.portalUrl)}" style="background:#0A66F5;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold;display:inline-block">Open your portal</a></p><p style="line-height:1.5;font-size:14px">Please use this exact email address to sign in. A different address will not see your company.</p><p style="line-height:1.5;font-size:14px">Questions? Reply to this email or write to <a href="mailto:${escHtml(p.contact)}">${escHtml(p.contact)}</a>.</p><p style="font-size:14px;margin-bottom:0">The Taxcart team</p></div></body></html>`;
+  return { to: p.to, subject, text, html };
+}
+
 // src/http/throttle.ts
 var SupabaseThrottle = class {
   db;
@@ -879,6 +947,9 @@ function buildDeps(env) {
     fetchImpl: fetch,
     now: () => /* @__PURE__ */ new Date(),
     credentialKey: env["CREDENTIAL_ENCRYPTION_KEY"],
+    mailer: buildMailer(env, fetch),
+    portalUrl: portalUrl(env, config.appOrigins[0]),
+    alertTo: env["STAFF_ALERT_TO"] || DEFAULT_REPLY_TO,
     log
   };
   const cron = {
@@ -981,6 +1052,7 @@ var LIMITS = {
   // VAT service: sales-file checks and submissions, replies, and the staff team's day-to-day changes
   vatUpload: { perUser: { limit: 60, windowSeconds: 3600 } },
   vatWrite: { perUser: { limit: 120, windowSeconds: 3600 } },
+  vatInvite: { perUser: { limit: 30, windowSeconds: 3600 } },
   vatStaff: { perUser: { limit: 600, windowSeconds: 3600 } },
   // Document downloads per signed-in user
   download: {
@@ -1290,7 +1362,14 @@ async function addUser(request, deps) {
     } catch {
       deps.log("audit.staff_not_recorded");
     }
-    return jsonResponse({ ok: true, newSignIn: u.created }, 201, { setCookies: s.setCookies });
+    let emailed = "off";
+    if (body["welcome"] === true && deps.mailer && deps.portalUrl) {
+      const t = await deps.serviceDb.from("tenants").select("name").eq("id", tenantId).maybeSingle();
+      const name = String(t.data?.["name"] ?? "your company");
+      emailed = await deps.mailer.send(welcomeEmail({ to: email, clientName: name, portalUrl: deps.portalUrl, contact: DEFAULT_REPLY_TO })) ? "sent" : "failed";
+      if (emailed === "failed") deps.log("vat.welcome_email_failed");
+    }
+    return jsonResponse(body["welcome"] === true ? { ok: true, newSignIn: u.created, emailed } : { ok: true, newSignIn: u.created }, 201, { setCookies: s.setCookies });
   } catch (err) {
     return toErrorResponse(err, deps.log);
   }

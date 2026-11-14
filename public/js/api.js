@@ -82,6 +82,7 @@ export function createApi({ fetch: fetchImpl = globalThis.fetch?.bind(globalThis
     vatDownload: (id, kind) => call(`/api/vat?${qs({ op: 'download', id, kind })}`),
     vatCheck: (params, file) => file_(`/api/vat?${qs({ op: 'check', ...params })}`, file),
     vatSubmit: (params, file) => file_(`/api/vat?${qs({ op: 'submit', ...params })}`, file),
+    vatSubmitNil: (params) => post(`/api/vat?${qs({ op: 'submit-nil', ...params })}`, {}),
     vatReply: (id, body, behalf) => post('/api/vat?op=reply', { id, body, ...(behalf ? { behalf: true } : {}) }),
     vatQueue: () => call('/api/vat?op=queue'),
     vatClients: () => call('/api/vat?op=clients'),
@@ -90,6 +91,7 @@ export function createApi({ fetch: fetchImpl = globalThis.fetch?.bind(globalThis
     vatAttachReturn: (id, file) => file_(`/api/vat?${qs({ op: 'staff-return', id })}`, file),
     vatRegister: (payload) => post('/api/vat?op=staff-register', payload),
     vatUnregister: (id) => post('/api/vat?op=staff-unregister', { id }),
+    vatInvite: (payload) => post('/api/vat?op=staff-invite', payload),
     vatCreateClient: (payload) => post('/api/vat?op=staff-client', payload),
   };
 }

@@ -52,3 +52,26 @@ Emails of any kind (including "your return was filed"); virus scanning of upload
 
 ## View as client (staff)
 Clients page → "View as client" shows the client screens for that company. Server side: `preview=1` on list/detail hides staff-only data; `behalf` on submit/reply records the action as the client's and writes an audit entry (`vat.reply_on_behalf`, `onBehalfOfClient`). Clients cannot use it.
+
+## Welcome email (automatic invite)
+When staff add a client with an email, or give someone access, the site can email them the portal link and sign-in steps. A "Resend welcome email" form on each client card sends it again.
+
+It is OFF until these are set in Vercel (Settings → Environment Variables), then redeploy:
+- `INVITE_EMAILS_ENABLED` = `true`
+- `RESEND_API_KEY` = the sending key (create a new key in Resend; never paste it in chat, GitHub or notes)
+- Optional: `INVITE_FROM` (default `Taxcart <portal@mail.taxcart.com.au>`), `INVITE_REPLY_TO` (default `consulting@taxcart.com.au`), `PORTAL_URL` (default: the site address + `/vat/`)
+
+The sending domain (mail.taxcart.com.au) must be verified in Resend first, or the mail will only reach the Resend account owner. If an email fails, the client is still created and staff see a message. Code: `src/http/mailer.ts`.
+
+## Nil returns ("No sales this period")
+On the client's New submission page, a client can confirm they had no sales for a period instead of uploading a file. It creates the return as Submitted with no file (`submit-nil`), labelled "No sales" for staff and the client, and is audited (`vat.nil_submitted`). It cannot overwrite an existing return; a client who chose it by mistake sends a message on the return. OSS and IOSS require a return for every period, even with no sales.
+
+## Staff alerts (shared inbox)
+When a client uploads or replaces a sales file, sends a nil return, or replies on a return, a short alert goes to `consulting@taxcart.com.au` (change with `STAFF_ALERT_TO` in Vercel). It says only who and which return, never buyer details. Staff actions and "View as client" do not send alerts. It uses the same switch as the welcome email (`INVITE_EMAILS_ENABLED` + `RESEND_API_KEY`), so it is off until email is set up, and a failed email never blocks the client's action.
+
+## The Taxcart template and required columns
+Template: `public/vat/Taxcart-sales-template.xlsx` (linked from the client's upload page). Headings: Order name, Shipping country, Day, Gross sales, Discounts, Sales reversals, Net sales, Shipping charges, Return fees, Taxes, Total sales.
+- A file must have an order date (Day), a destination country (Shipping country) and a sales amount (Net sales) to be sent. Other names for those still work (see `SYNONYMS` in `src/vat/validate.ts`).
+- If any other template column is missing, the client sees a warning naming them and can still send the file.
+- Extra columns are ignored. The amount used is Net sales; Gross sales, Taxes etc. are not yet used in totals.
+To change the list, edit `TEMPLATE_COLUMNS` and the template file together.

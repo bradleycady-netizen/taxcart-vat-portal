@@ -5,6 +5,7 @@ import { SupabaseStore } from '../sync/supabaseStore.ts';
 import { SupabaseAuditSink } from './audit.ts';
 import { SupabaseAuthApi } from './authApi.ts';
 import { loadConfig } from './config.ts';
+import { DEFAULT_REPLY_TO, buildMailer, portalUrl } from './mailer.ts';
 import type { CronDeps } from './handlers/cron.ts';
 import type { StaffDeps } from './handlers/staff.ts';
 import { SupabaseThrottle } from './throttle.ts';
@@ -60,6 +61,9 @@ export function buildDeps(env: Env): { deps: Deps; cron: CronDeps; staff: StaffD
     fetchImpl: fetch,
     now: () => new Date(),
     credentialKey: env['CREDENTIAL_ENCRYPTION_KEY'],
+    mailer: buildMailer(env, fetch),
+    portalUrl: portalUrl(env, config.appOrigins[0]!),
+    alertTo: env['STAFF_ALERT_TO'] || DEFAULT_REPLY_TO,
     log,
   };
   const cron: CronDeps = {

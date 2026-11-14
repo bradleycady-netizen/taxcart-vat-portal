@@ -3,6 +3,7 @@ import type { AdapterResolver } from '../sync/sync.ts';
 import type { AuditSink } from './audit.ts';
 import type { AuthApi } from './authApi.ts';
 import type { AppConfig } from './config.ts';
+import type { Mailer } from './mailer.ts';
 import type { Throttle } from './throttle.ts';
 
 export type Logger = (event: string, fields?: Record<string, unknown>) => void;
@@ -28,6 +29,12 @@ export interface Deps {
   now(): Date;
   /** Key for encrypting stored provider tokens (CREDENTIAL_ENCRYPTION_KEY). Undefined = token storage not configured. */
   credentialKey?: string | undefined;
+  /** Sends welcome emails. Undefined = switched off (the default until the sending domain is verified). */
+  mailer?: Mailer | undefined;
+  /** Shared inbox that gets a short alert when a client uploads, sends a nil return or replies. */
+  alertTo?: string | undefined;
+  /** Address clients are sent to in the welcome email. */
+  portalUrl?: string | undefined;
   /** Operational events. Never pass emails, codes, tokens or provider error bodies that name the vendor to clients. */
   log: Logger;
 }

@@ -32,17 +32,32 @@ export interface CheckResult {
 
 // Heading synonyms, best first. Headings are compared with everything except letters and digits removed.
 const SYNONYMS = {
-  date: ['createdat', 'orderdate', 'date', 'paidat', 'processedat', 'invoicedate', 'transactiondate', 'created', 'vatreportingdate', 'paymentdate', 'shippingdate'],
+  date: ['createdat', 'orderdate', 'date', 'paidat', 'processedat', 'invoicedate', 'transactiondate', 'created', 'vatreportingdate', 'paymentdate', 'shippingdate', 'day'],
   country: ['shippingcountrycode', 'shipcountrycode', 'destinationcountrycode', 'deliverycountrycode', 'countrycode', 'shippingcountry', 'shipcountry', 'destinationcountry', 'deliverycountry', 'shiptocountry', 'country', 'billingcountrycode', 'billingcountry', 'arrivalcountry', 'vatcountry'],
   amount: ['subtotal', 'netamount', 'netsales', 'net', 'salesamount', 'amount', 'ordertotal', 'total', 'value', 'lineitemprice', 'itemnetprice'],
   currency: ['currency', 'presentmentcurrency', 'currencycode', 'originalcurrency'],
-  order: ['name', 'ordernumber', 'orderid', 'order', 'transactionid', 'invoicenumber', 'reference', 'id'],
+  order: ['name', 'ordername', 'ordernumber', 'orderid', 'order', 'transactionid', 'invoicenumber', 'reference', 'id'],
 } as const;
 const EXPECTED = {
   date: 'Created at, Order date or Date',
   country: 'Shipping Country Code, Destination country or Country',
   amount: 'Subtotal, Net amount or Amount',
 } as const;
+
+/** The columns in Taxcart's own template. Files may have more; if any of these are missing we flag it (but only date, country and amount stop a file). */
+const TEMPLATE_COLUMNS: { name: string; keys: readonly string[] | null }[] = [
+  { name: 'Order name', keys: null },
+  { name: 'Shipping country', keys: null },
+  { name: 'Day', keys: null },
+  { name: 'Gross sales', keys: ['grosssales', 'gross'] },
+  { name: 'Discounts', keys: ['discounts', 'discount'] },
+  { name: 'Sales reversals', keys: ['salesreversals', 'salesreversal', 'reversals', 'refunds', 'returns'] },
+  { name: 'Net sales', keys: null },
+  { name: 'Shipping charges', keys: ['shippingcharges', 'shippingcharge', 'shippingcost', 'shipping'] },
+  { name: 'Return fees', keys: ['returnfees', 'returnfee'] },
+  { name: 'Taxes', keys: ['taxes', 'tax', 'vat', 'vatamount'] },
+  { name: 'Total sales', keys: ['totalsales', 'ordertotal', 'total'] },
+];
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -99,15 +114,25 @@ export function parseAmount(raw: string): number | null {
 }
 
 /** Reads the date part of what was written. Slash dates are read day-first (UK, EU and Australian style) unless clearly month-first. */
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+
 export function parseDate(raw: string): string | null {
   const v = raw.trim();
-  let m = v.match(/^(\d{4})-(\d{2})-(\d{2})(?![\d])/);
+  let m: RegExpMatchArray | null;
   let y: number, mo: number, d: number;
-  if (m) { y = +m[1]!; mo = +m[2]!; d = +m[3]!; }
-  else if ((m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?![\d])/))) {
+  if ((m = v.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?![\d])/))) { y = +m[1]!; mo = +m[2]!; d = +m[3]!; }
+  else if ((m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?![\d])/))) {
     const a = +m[1]!, b = +m[2]!;
-    y = +m[3]!;
+    y = m[3]!.length === 2 ? 2000 + +m[3]! : +m[3]!;
     if (a > 12 && b <= 12) { d = a; mo = b; } else if (b > 12 && a <= 12) { d = b; mo = a; } else { d = a; mo = b; }
+  } else if ((m = v.match(/^(\d{1,2})[\s.\-/]+([A-Za-z]{3,9})\.?[\s.,\-/]+(\d{4}|\d{2})(?![\d])/))) {
+    const mm = MONTHS[m[2]!.toLowerCase().slice(0, m[2]!.toLowerCase().startsWith('sept') ? 4 : 3)];
+    if (!mm) return null;
+    d = +m[1]!; mo = mm; y = m[3]!.length === 2 ? 2000 + +m[3]! : +m[3]!;
+  } else if ((m = v.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})(?![\d])/))) {
+    const mm = MONTHS[m[1]!.toLowerCase().slice(0, 3)];
+    if (!mm) return null;
+    mo = mm; d = +m[2]!; y = +m[3]!;
   } else return null;
   if (mo < 1 || mo > 12 || d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate() || y < 2000 || y > 2100) return null;
   return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -226,6 +251,15 @@ export function checkSalesFile(fileName: string, bytes: Uint8Array, ctx: { schem
   }
   if (nonEu.length) warnings.push(issue('non_eu', nonEu, (n) => `${n} row${n === 1 ? ' ships' : 's ship'} outside the EU. ${SCHEME_INFO[ctx.scheme].label} covers EU destinations only, so Taxcart will ask about these.`));
   if (dupes.length) warnings.push(issue('duplicates', dupes, (n) => `${n} row${n === 1 ? ' looks' : 's look'} like an exact repeat of an earlier order. Check nothing is counted twice.`));
+  const heads = new Set(headerRow.map(norm));
+  const missingCols = TEMPLATE_COLUMNS.filter((c) => {
+    if (c.name === 'Order name') return cols.order < 0;
+    if (c.name === 'Shipping country') return false; // already required
+    if (c.name === 'Day') return false;
+    if (c.name === 'Net sales') return false;
+    return !c.keys!.some((k) => heads.has(k));
+  }).map((c) => c.name);
+  if (missingCols.length) warnings.push({ code: 'template_columns', message: `Your file is missing ${missingCols.length === 1 ? 'a column' : 'columns'} from the Taxcart template: ${missingCols.join(', ')}. You can still send it, but Taxcart may come back to you about the figures.` });
   if (cols.currency < 0) warnings.push({ code: 'no_currency', message: 'There is no currency column, so we cannot tell which currency the amounts are in.' });
   else if (noCurrency > 0) warnings.push({ code: 'blank_currency', message: `${noCurrency} row${noCurrency === 1 ? ' has' : 's have'} no currency.` });
   if (totals.size > 1 && cols.currency >= 0) warnings.push({ code: 'mixed_currency', message: `The file mixes ${[...totals.keys()].join(', ')}. Totals are shown for each currency separately.` });

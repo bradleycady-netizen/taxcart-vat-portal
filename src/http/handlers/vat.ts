@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { COUNTRIES, SCHEMES, SCHEME_INFO, STATUSES, countryName, defaultDueDate, parsePeriod, periodLabel, recentEndedPeriods, validRegistration, type Frequency, type Scheme, type VatStatus } from '../../vat/config.ts';
 import { MAX_UPLOAD_BYTES, checkSalesFile } from '../../vat/validate.ts';
 import { LIMITS, type Rule } from '../limits.ts';
+import { DEFAULT_REPLY_TO, staffAlertEmail, welcomeEmail } from '../mailer.ts';
 import { authenticate, type Authenticated } from '../session.ts';
 import type { Deps } from '../types.ts';
 import { HttpError, UUID_RE, bucketKey, errorResponse, jsonResponse, normalizeEmail, readJsonObject, requireAllowedOrigin, requireMethod, toErrorResponse } from '../util.ts';
@@ -63,6 +64,8 @@ function cleanText(v: unknown, max = 2000): string {
 const PREPARED = ['return_prepared', 'filed', 'complete'];
 
 /** `staff` false = a client is looking: the finished return is not mentioned until Taxcart has prepared it. */
+const NIL_NAME = 'No sales this period';
+
 function mapReturn(r: Row, tenantNames?: Map<string, string>, staff = true): Row {
   const scheme = String(r['scheme']) as Scheme;
   return {
@@ -82,6 +85,7 @@ function mapReturn(r: Row, tenantNames?: Map<string, string>, staff = true): Row
     submittedAt: r['submitted_at'],
     updatedAt: r['updated_at'],
     filedAt: r['filed_at'] ?? null,
+    nil: !r['upload_path'] && r['upload_name'] === NIL_NAME,
     upload: r['upload_path'] ? { name: r['upload_name'], bytes: r['upload_bytes'], rows: r['upload_rows'] } : null,
     returnFile: r['return_path'] && (staff || PREPARED.includes(String(r['status']))) ? { name: r['return_name'], bytes: r['return_bytes'] } : null,
   };
@@ -308,7 +312,36 @@ async function submit(request: Request, deps: Deps): Promise<Response> {
   }
   await deps.serviceDb.from('vat_events').insert({ return_id: returnId, tenant_id: ctx.tenant, actor_id: a.user.id, actor_side: a.user.isStaff && !ctx.behalf ? 'staff' : 'client', kind: prior ? 'file_replaced' : 'submitted', body: fileName });
   await audit(deps, { tenantId: ctx.tenant, actorId: a.user.id, action: prior ? 'vat.file_replaced' : 'vat.submitted', target: `vat_return:${returnId}`, detail: { scheme: ctx.scheme, country: ctx.country, period: ctx.period.code, rows: result.summary.rows, ...(ctx.behalf ? { onBehalfOfClient: true } : {}) } });
+  if (!a.user.isStaff) await alertStaff(deps, ctx.tenant, `${prior ? 'replaced the sales file for' : 'uploaded a sales file for'} ${SCHEME_INFO[ctx.scheme].label} ${countryName(ctx.country)} ${periodLabel(ctx.period.code)}`);
   return jsonResponse({ id: returnId, replaced: Boolean(prior), result }, prior ? 200 : 201, { setCookies: a.setCookies });
+}
+
+/** POST ?op=submit-nil: the client confirms they had no sales in the period (a nil return). No file; recorded as Submitted. */
+async function submitNil(request: Request, deps: Deps): Promise<Response> {
+  requireMethod(request, 'POST');
+  const a = await requireUser(request, deps);
+  if (a instanceof Response) return a;
+  const ctx = await readUploadContext(request, deps, a);
+  await throttle(deps, 'vat-upload', a.user.id, LIMITS.vatUpload.perUser);
+  const existing = await deps.serviceDb.from('vat_returns').select('id').eq('tenant_id', ctx.tenant).eq('scheme', ctx.scheme).eq('country', ctx.country).eq('period_code', ctx.period.code).maybeSingle();
+  if (existing.error) throw new Error('could not check existing return');
+  if (existing.data) throw new HttpError(409, 'already_received', 'Something has already been sent for that period. Please send any changes as a message on the return instead.');
+  const returnId = crypto.randomUUID();
+  const now = deps.now().toISOString();
+  const ins = await deps.serviceDb.from('vat_returns').insert({
+    id: returnId, tenant_id: ctx.tenant, registration_id: ctx.registrationId, scheme: ctx.scheme, country: ctx.country,
+    period_code: ctx.period.code, period_start: ctx.period.start, period_end: ctx.period.end, due_on: defaultDueDate(ctx.scheme, ctx.period), status: 'submitted',
+    upload_path: null, upload_name: NIL_NAME, upload_bytes: 0, upload_rows: 0, upload_summary: { nil: true },
+    submitted_by: a.user.id, submitted_at: now, updated_at: now,
+  });
+  if (ins.error) {
+    if (ins.error.code === '23505') throw new HttpError(409, 'already_received', 'Something has just been sent for that period. Please refresh the page.');
+    throw new Error('could not save return');
+  }
+  await deps.serviceDb.from('vat_events').insert({ return_id: returnId, tenant_id: ctx.tenant, actor_id: a.user.id, actor_side: a.user.isStaff && !ctx.behalf ? 'staff' : 'client', kind: 'submitted', body: NIL_NAME });
+  await audit(deps, { tenantId: ctx.tenant, actorId: a.user.id, action: 'vat.nil_submitted', target: `vat_return:${returnId}`, detail: { scheme: ctx.scheme, country: ctx.country, period: ctx.period.code, ...(ctx.behalf ? { onBehalfOfClient: true } : {}) } });
+  if (!a.user.isStaff) await alertStaff(deps, ctx.tenant, `confirmed no sales for ${SCHEME_INFO[ctx.scheme].label} ${countryName(ctx.country)} ${periodLabel(ctx.period.code)}`);
+  return jsonResponse({ id: returnId, nil: true }, 201, { setCookies: a.setCookies });
 }
 
 /** POST ?op=reply {id, body}: the client answers a question or adds a note. */
@@ -329,6 +362,7 @@ async function reply(request: Request, deps: Deps): Promise<Response> {
   if (ins.error) throw new Error('could not save reply');
   if (a.user.isStaff && side === 'client') await audit(deps, { tenantId: tenant, actorId: a.user.id, action: 'vat.reply_on_behalf', target: `vat_return:${id}` });
   if (side === 'client') await deps.serviceDb.from('vat_returns').update({ awaiting_client: false, updated_at: deps.now().toISOString() }).eq('id', id);
+  if (!a.user.isStaff) await alertStaff(deps, tenant, `replied on their ${SCHEME_INFO[String(row['scheme']) as Scheme]?.label ?? 'VAT'} ${countryName(String(row['country']))} ${periodLabel(String(row['period_code']))} return`);
   return jsonResponse({ ok: true }, 201, { setCookies: a.setCookies });
 }
 
@@ -499,6 +533,25 @@ async function unregister(request: Request, deps: Deps): Promise<Response> {
 }
 
 /** POST ?op=staff-client {name, email?}: create a client for the VAT service (and invite their first person). */
+/** Tells the shared Taxcart inbox something arrived. Off unless emails are switched on; never blocks or fails the request. */
+async function alertStaff(deps: Deps, tenantId: string, what: string): Promise<void> {
+  if (!deps.mailer || !deps.alertTo || !deps.portalUrl) return;
+  try {
+    const t = await deps.serviceDb.from('tenants').select('name').eq('id', tenantId).maybeSingle();
+    const name = str((t.data as Row | null)?.['name']) || 'A client';
+    const ok = await deps.mailer.send(staffAlertEmail({ to: deps.alertTo, subject: `VAT portal: ${name} ${what}`, lines: [`${name} ${what}.`], portalUrl: deps.portalUrl }));
+    if (!ok) deps.log('vat.staff_alert_failed');
+  } catch { deps.log('vat.staff_alert_failed'); }
+}
+
+/** Sends the welcome email if switched on. 'off' = not configured (nothing sent), 'sent', or 'failed'. */
+async function sendWelcome(deps: Deps, to: string, clientName: string): Promise<'off' | 'sent' | 'failed'> {
+  if (!deps.mailer || !deps.portalUrl) return 'off';
+  const ok = await deps.mailer.send(welcomeEmail({ to, clientName, portalUrl: deps.portalUrl, contact: DEFAULT_REPLY_TO }));
+  if (!ok) deps.log('vat.welcome_email_failed');
+  return ok ? 'sent' : 'failed';
+}
+
 async function createClient(request: Request, deps: Deps): Promise<Response> {
   requireMethod(request, 'POST');
   requireAllowedOrigin(request, deps.config);
@@ -520,8 +573,33 @@ async function createClient(request: Request, deps: Deps): Promise<Response> {
       invite = link.error ? 'failed' : u.created ? 'created' : 'existing';
     } else invite = 'failed';
   }
-  await audit(deps, { tenantId, actorId: s.user.id, action: 'vat.client_created', target: `tenant:${tenantId}`, detail: { invited: invite } });
-  return jsonResponse({ client: { id: tenantId, name }, invite }, 201, { setCookies: s.setCookies });
+  const emailed = email && (invite === 'created' || invite === 'existing') ? await sendWelcome(deps, email, name) : 'off';
+  await audit(deps, { tenantId, actorId: s.user.id, action: 'vat.client_created', target: `tenant:${tenantId}`, detail: { invited: invite, welcomeEmail: emailed } });
+  return jsonResponse({ client: { id: tenantId, name }, invite, emailed }, 201, { setCookies: s.setCookies });
+}
+
+/** POST ?op=staff-invite {tenantId, email}: (re)send the welcome email to someone who already has access. */
+async function resendInvite(request: Request, deps: Deps): Promise<Response> {
+  requireMethod(request, 'POST');
+  requireAllowedOrigin(request, deps.config);
+  const s = await requireStaff(request, deps);
+  if (s instanceof Response) return s;
+  await throttle(deps, 'vat-invite', s.user.id, LIMITS.vatInvite.perUser);
+  const body = await readJsonObject(request, 4096);
+  const tenantId = str(body['tenantId']);
+  if (!UUID_RE.test(tenantId)) throw new HttpError(400, 'invalid_input', 'A valid client is required.');
+  const email = normalizeEmail(body['email']);
+  if (!deps.mailer) throw new HttpError(409, 'emails_off', 'Welcome emails are not switched on yet.');
+  const t = await deps.serviceDb.from('tenants').select('id, name').eq('id', tenantId).maybeSingle();
+  const tenant = t.data as Row | null;
+  if (t.error || !tenant) throw new HttpError(404, 'not_found', 'Not found.');
+  const u = await deps.auth.ensureUser(email);
+  const m = u ? await deps.serviceDb.from('tenant_members').select('user_id').eq('tenant_id', tenantId).eq('user_id', u.id).maybeSingle() : null;
+  if (!u || !m || m.error || !m.data) throw new HttpError(404, 'not_member', 'That email does not have access to this client yet. Give them access first.');
+  const emailed = await sendWelcome(deps, email, str(tenant['name']));
+  await audit(deps, { tenantId, actorId: s.user.id, action: 'vat.welcome_resent', target: `user:${u.id}`, detail: { welcomeEmail: emailed } });
+  if (emailed !== 'sent') throw new HttpError(502, 'email_failed', 'The email could not be sent. Please try again shortly.');
+  return jsonResponse({ ok: true }, 200, { setCookies: s.setCookies });
 }
 
 // ------------------------------------------------------------------ router
@@ -535,6 +613,7 @@ export async function vatRoute(request: Request, deps: Deps): Promise<Response> 
       case 'download': return await download(request, deps);
       case 'check': return await check(request, deps);
       case 'submit': return await submit(request, deps);
+      case 'submit-nil': return await submitNil(request, deps);
       case 'reply': return await reply(request, deps);
       case 'queue': return await queue(request, deps);
       case 'clients': return await clients(request, deps);
@@ -544,6 +623,7 @@ export async function vatRoute(request: Request, deps: Deps): Promise<Response> 
       case 'staff-register': return await register(request, deps);
       case 'staff-unregister': return await unregister(request, deps);
       case 'staff-client': return await createClient(request, deps);
+      case 'staff-invite': return await resendInvite(request, deps);
       default: return errorResponse(404, 'not_found', 'Not found.');
     }
   } catch (err) {

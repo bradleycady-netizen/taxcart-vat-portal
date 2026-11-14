@@ -1,0 +1,24 @@
+{
+  "name": "taxcart-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Taxcart white-label compliance platform: provider-neutral core, Zamp adapter, sync engine",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "build:api": "node scripts/build-api.mjs",
+    "check:api": "node scripts/build-api.mjs --check"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0"
+  }
+}

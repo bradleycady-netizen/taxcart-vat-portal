@@ -729,6 +729,51 @@ function intSetting(raw, fallback, min, max, name, problems) {
   return n;
 }
 
+// src/http/mailer.ts
+var DEFAULT_FROM = "Taxcart <portal@mail.taxcart.com.au>";
+var DEFAULT_REPLY_TO = "consulting@taxcart.com.au";
+var ResendMailer = class {
+  apiKey;
+  from;
+  replyTo;
+  fetchImpl;
+  constructor(apiKey, from, replyTo, fetchImpl) {
+    this.apiKey = apiKey;
+    this.from = from;
+    this.replyTo = replyTo;
+    this.fetchImpl = fetchImpl;
+  }
+  async send(mail) {
+    try {
+      const res = await this.fetchImpl("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: this.from, to: [mail.to], reply_to: this.replyTo, subject: mail.subject, text: mail.text, html: mail.html }),
+        signal: AbortSignal.timeout(8e3)
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+};
+function buildMailer(env, fetchImpl) {
+  if (env["INVITE_EMAILS_ENABLED"] !== "true") return void 0;
+  const key = env["RESEND_API_KEY"];
+  if (!key) return void 0;
+  return new ResendMailer(key, env["INVITE_FROM"] || DEFAULT_FROM, env["INVITE_REPLY_TO"] || DEFAULT_REPLY_TO, fetchImpl);
+}
+function portalUrl(env, firstOrigin) {
+  const set = env["PORTAL_URL"];
+  if (set) {
+    try {
+      return new URL(set).toString();
+    } catch {
+    }
+  }
+  return `${firstOrigin}/vat/`;
+}
+
 // src/http/throttle.ts
 var SupabaseThrottle = class {
   db;
@@ -782,6 +827,9 @@ function buildDeps(env) {
     fetchImpl: fetch,
     now: () => /* @__PURE__ */ new Date(),
     credentialKey: env["CREDENTIAL_ENCRYPTION_KEY"],
+    mailer: buildMailer(env, fetch),
+    portalUrl: portalUrl(env, config.appOrigins[0]),
+    alertTo: env["STAFF_ALERT_TO"] || DEFAULT_REPLY_TO,
     log
   };
   const cron = {

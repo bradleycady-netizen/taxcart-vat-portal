@@ -7,6 +7,7 @@ import { syncAll, type SyncResult } from '../../sync/sync.ts';
 import type { ConnectionSource } from '../../sync/runner.ts';
 import type { SyncStore } from '../../sync/sync.ts';
 import { LIMITS } from '../limits.ts';
+import { DEFAULT_REPLY_TO, welcomeEmail } from '../mailer.ts';
 import { authenticate, type Authenticated } from '../session.ts';
 import type { Deps } from '../types.ts';
 import { MAX_LOGO_BYTES, sniffImageType } from './logo.ts';
@@ -317,7 +318,15 @@ export async function addUser(request: Request, deps: Deps): Promise<Response> {
     } catch {
       deps.log('audit.staff_not_recorded');
     }
-    return jsonResponse({ ok: true, newSignIn: u.created }, 201, { setCookies: s.setCookies });
+    // The VAT page asks for a welcome email (welcome: true). Off unless emails are switched on; never undoes the access.
+    let emailed: 'off' | 'sent' | 'failed' = 'off';
+    if (body['welcome'] === true && deps.mailer && deps.portalUrl) {
+      const t = await deps.serviceDb.from('tenants').select('name').eq('id', tenantId).maybeSingle();
+      const name = String((t.data as Record<string, unknown> | null)?.['name'] ?? 'your company');
+      emailed = (await deps.mailer.send(welcomeEmail({ to: email, clientName: name, portalUrl: deps.portalUrl, contact: DEFAULT_REPLY_TO }))) ? 'sent' : 'failed';
+      if (emailed === 'failed') deps.log('vat.welcome_email_failed');
+    }
+    return jsonResponse(body['welcome'] === true ? { ok: true, newSignIn: u.created, emailed } : { ok: true, newSignIn: u.created }, 201, { setCookies: s.setCookies });
   } catch (err) {
     return toErrorResponse(err, deps.log);
   }

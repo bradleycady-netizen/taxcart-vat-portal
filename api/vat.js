@@ -729,6 +729,79 @@ function intSetting(raw, fallback, min, max, name, problems) {
   return n;
 }
 
+// src/http/mailer.ts
+var DEFAULT_FROM = "Taxcart <portal@mail.taxcart.com.au>";
+var DEFAULT_REPLY_TO = "consulting@taxcart.com.au";
+var ResendMailer = class {
+  apiKey;
+  from;
+  replyTo;
+  fetchImpl;
+  constructor(apiKey, from, replyTo, fetchImpl) {
+    this.apiKey = apiKey;
+    this.from = from;
+    this.replyTo = replyTo;
+    this.fetchImpl = fetchImpl;
+  }
+  async send(mail) {
+    try {
+      const res = await this.fetchImpl("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: this.from, to: [mail.to], reply_to: this.replyTo, subject: mail.subject, text: mail.text, html: mail.html }),
+        signal: AbortSignal.timeout(8e3)
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+};
+function buildMailer(env, fetchImpl) {
+  if (env["INVITE_EMAILS_ENABLED"] !== "true") return void 0;
+  const key = env["RESEND_API_KEY"];
+  if (!key) return void 0;
+  return new ResendMailer(key, env["INVITE_FROM"] || DEFAULT_FROM, env["INVITE_REPLY_TO"] || DEFAULT_REPLY_TO, fetchImpl);
+}
+function portalUrl(env, firstOrigin) {
+  const set = env["PORTAL_URL"];
+  if (set) {
+    try {
+      return new URL(set).toString();
+    } catch {
+    }
+  }
+  return `${firstOrigin}/vat/`;
+}
+var escHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function welcomeEmail(p) {
+  const subject = "Welcome to the Taxcart VAT portal";
+  const text = [
+    `Welcome to Taxcart.`,
+    ``,
+    `Your VAT portal for ${p.clientName} is ready. This is where you send us your sales files and follow each VAT return from start to finish.`,
+    ``,
+    `To get started:`,
+    `1. Open ${p.portalUrl}`,
+    `2. Enter this email address (${p.to}) and ask for a sign-in code.`,
+    `3. We email you a 6-digit code. Type it in to sign in. There is no password to remember.`,
+    `4. Choose your filing and period, add your sales file (CSV or Excel), check it, and send it to us.`,
+    ``,
+    `Please use this exact email address to sign in. A different address will not see your company.`,
+    ``,
+    `Questions? Reply to this email or write to ${p.contact}.`,
+    ``,
+    `The Taxcart team`
+  ].join("\n");
+  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#EAF1FE;font-family:Arial,Helvetica,sans-serif;color:#0B1F4D"><div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:28px"><h1 style="font-size:20px;margin:0 0 12px">Welcome to Taxcart</h1><p style="line-height:1.5">Your VAT portal for <strong>${escHtml(p.clientName)}</strong> is ready. This is where you send us your sales files and follow each VAT return from start to finish.</p><ol style="line-height:1.6;padding-left:20px"><li>Open the portal below.</li><li>Enter this email address (<strong>${escHtml(p.to)}</strong>) and ask for a sign-in code.</li><li>We email you a 6-digit code. Type it in. There is no password to remember.</li><li>Choose your filing and period, add your sales file (CSV or Excel), check it, and send it to us.</li></ol><p style="margin:22px 0"><a href="${escHtml(p.portalUrl)}" style="background:#0A66F5;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold;display:inline-block">Open your portal</a></p><p style="line-height:1.5;font-size:14px">Please use this exact email address to sign in. A different address will not see your company.</p><p style="line-height:1.5;font-size:14px">Questions? Reply to this email or write to <a href="mailto:${escHtml(p.contact)}">${escHtml(p.contact)}</a>.</p><p style="font-size:14px;margin-bottom:0">The Taxcart team</p></div></body></html>`;
+  return { to: p.to, subject, text, html };
+}
+function staffAlertEmail(p) {
+  const text = [...p.lines, "", `Open the portal: ${p.portalUrl}`].join("\n");
+  const html = `<!doctype html><html><body style="margin:0;padding:24px;font-family:Arial,Helvetica,sans-serif;color:#0B1F4D"><div style="max-width:560px;margin:0 auto">${p.lines.map((l) => `<p style="line-height:1.5;margin:0 0 10px">${escHtml(l)}</p>`).join("")}<p style="margin-top:18px"><a href="${escHtml(p.portalUrl)}">Open the portal</a></p></div></body></html>`;
+  return { to: p.to, subject: p.subject, text, html };
+}
+
 // src/http/throttle.ts
 var SupabaseThrottle = class {
   db;
@@ -782,6 +855,9 @@ function buildDeps(env) {
     fetchImpl: fetch,
     now: () => /* @__PURE__ */ new Date(),
     credentialKey: env["CREDENTIAL_ENCRYPTION_KEY"],
+    mailer: buildMailer(env, fetch),
+    portalUrl: portalUrl(env, config.appOrigins[0]),
+    alertTo: env["STAFF_ALERT_TO"] || DEFAULT_REPLY_TO,
     log
   };
   const cron = {
@@ -1103,17 +1179,30 @@ var MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 var MAX_DATA_ROWS = 5e4;
 var SAMPLE = 5;
 var SYNONYMS = {
-  date: ["createdat", "orderdate", "date", "paidat", "processedat", "invoicedate", "transactiondate", "created", "vatreportingdate", "paymentdate", "shippingdate"],
+  date: ["createdat", "orderdate", "date", "paidat", "processedat", "invoicedate", "transactiondate", "created", "vatreportingdate", "paymentdate", "shippingdate", "day"],
   country: ["shippingcountrycode", "shipcountrycode", "destinationcountrycode", "deliverycountrycode", "countrycode", "shippingcountry", "shipcountry", "destinationcountry", "deliverycountry", "shiptocountry", "country", "billingcountrycode", "billingcountry", "arrivalcountry", "vatcountry"],
   amount: ["subtotal", "netamount", "netsales", "net", "salesamount", "amount", "ordertotal", "total", "value", "lineitemprice", "itemnetprice"],
   currency: ["currency", "presentmentcurrency", "currencycode", "originalcurrency"],
-  order: ["name", "ordernumber", "orderid", "order", "transactionid", "invoicenumber", "reference", "id"]
+  order: ["name", "ordername", "ordernumber", "orderid", "order", "transactionid", "invoicenumber", "reference", "id"]
 };
 var EXPECTED = {
   date: "Created at, Order date or Date",
   country: "Shipping Country Code, Destination country or Country",
   amount: "Subtotal, Net amount or Amount"
 };
+var TEMPLATE_COLUMNS = [
+  { name: "Order name", keys: null },
+  { name: "Shipping country", keys: null },
+  { name: "Day", keys: null },
+  { name: "Gross sales", keys: ["grosssales", "gross"] },
+  { name: "Discounts", keys: ["discounts", "discount"] },
+  { name: "Sales reversals", keys: ["salesreversals", "salesreversal", "reversals", "refunds", "returns"] },
+  { name: "Net sales", keys: null },
+  { name: "Shipping charges", keys: ["shippingcharges", "shippingcharge", "shippingcost", "shipping"] },
+  { name: "Return fees", keys: ["returnfees", "returnfee"] },
+  { name: "Taxes", keys: ["taxes", "tax", "vat", "vatamount"] },
+  { name: "Total sales", keys: ["totalsales", "ordertotal", "total"] }
+];
 var norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 var NOT_COUNTRIES = /* @__PURE__ */ new Set(["EU", "UN", "EZ", "QO", "AC", "CP", "DG", "EA", "IC", "TA", "XA", "XB", "ZZ"]);
 var isoCodes = null;
@@ -1172,17 +1261,18 @@ function parseAmount(raw) {
   const n = Number(s);
   return Number.isFinite(n) ? neg ? -n : n : null;
 }
+var MONTHS2 = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
 function parseDate(raw) {
   const v = raw.trim();
-  let m = v.match(/^(\d{4})-(\d{2})-(\d{2})(?![\d])/);
+  let m;
   let y, mo, d;
-  if (m) {
+  if (m = v.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?![\d])/)) {
     y = +m[1];
     mo = +m[2];
     d = +m[3];
-  } else if (m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?![\d])/)) {
+  } else if (m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?![\d])/)) {
     const a = +m[1], b = +m[2];
-    y = +m[3];
+    y = m[3].length === 2 ? 2e3 + +m[3] : +m[3];
     if (a > 12 && b <= 12) {
       d = a;
       mo = b;
@@ -1193,6 +1283,18 @@ function parseDate(raw) {
       d = a;
       mo = b;
     }
+  } else if (m = v.match(/^(\d{1,2})[\s.\-/]+([A-Za-z]{3,9})\.?[\s.,\-/]+(\d{4}|\d{2})(?![\d])/)) {
+    const mm = MONTHS2[m[2].toLowerCase().slice(0, m[2].toLowerCase().startsWith("sept") ? 4 : 3)];
+    if (!mm) return null;
+    d = +m[1];
+    mo = mm;
+    y = m[3].length === 2 ? 2e3 + +m[3] : +m[3];
+  } else if (m = v.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})(?![\d])/)) {
+    const mm = MONTHS2[m[1].toLowerCase().slice(0, 3)];
+    if (!mm) return null;
+    mo = mm;
+    d = +m[2];
+    y = +m[3];
   } else return null;
   if (mo < 1 || mo > 12 || d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate() || y < 2e3 || y > 2100) return null;
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -1237,10 +1339,10 @@ function checkSalesFile(fileName, bytes, ctx) {
   let headerAt = -1;
   let cols = null;
   for (let i = 0; i < Math.min(rows.length, 6) && !cols; i++) {
-    const heads = (rows[i] ?? []).map((h) => norm(h ?? ""));
+    const heads2 = (rows[i] ?? []).map((h) => norm(h ?? ""));
     const find = (list2) => {
       for (const s of list2) {
-        const at = heads.indexOf(s);
+        const at = heads2.indexOf(s);
         if (at >= 0) return at;
       }
       return -1;
@@ -1252,12 +1354,12 @@ function checkSalesFile(fileName, bytes, ctx) {
     }
   }
   if (!cols) {
-    const heads = (rows.find((r) => r.some((c) => c.trim() !== "")) ?? []).map((h) => h.trim()).filter(Boolean);
+    const heads2 = (rows.find((r) => r.some((c) => c.trim() !== "")) ?? []).map((h) => h.trim()).filter(Boolean);
     const missing = [];
-    const h0 = heads.map(norm);
+    const h0 = heads2.map(norm);
     for (const k of ["date", "country", "amount"]) if (!SYNONYMS[k].some((s) => h0.includes(s))) missing.push(`${k === "date" ? "order date" : k === "country" ? "destination country" : "sales amount"} (for example: ${EXPECTED[k]})`);
-    const found = heads.slice(0, 12).join(", ");
-    return { ok: false, fileType, summary: null, warnings: [], errors: [{ code: "columns", message: `We could not find the ${missing.join(", the ")} column.${found ? ` The columns in your file are: ${found}${heads.length > 12 ? ", \u2026" : ""}.` : ""} Please upload the standard order export.` }] };
+    const found = heads2.slice(0, 12).join(", ");
+    return { ok: false, fileType, summary: null, warnings: [], errors: [{ code: "columns", message: `We could not find the ${missing.join(", the ")} column.${found ? ` The columns in your file are: ${found}${heads2.length > 12 ? ", \u2026" : ""}.` : ""} Please upload the standard order export.` }] };
   }
   const errors = [];
   const warnings = [];
@@ -1333,6 +1435,15 @@ function checkSalesFile(fileName, bytes, ctx) {
   }
   if (nonEu.length) warnings.push(issue("non_eu", nonEu, (n) => `${n} row${n === 1 ? " ships" : "s ship"} outside the EU. ${SCHEME_INFO[ctx.scheme].label} covers EU destinations only, so Taxcart will ask about these.`));
   if (dupes.length) warnings.push(issue("duplicates", dupes, (n) => `${n} row${n === 1 ? " looks" : "s look"} like an exact repeat of an earlier order. Check nothing is counted twice.`));
+  const heads = new Set(headerRow.map(norm));
+  const missingCols = TEMPLATE_COLUMNS.filter((c) => {
+    if (c.name === "Order name") return cols.order < 0;
+    if (c.name === "Shipping country") return false;
+    if (c.name === "Day") return false;
+    if (c.name === "Net sales") return false;
+    return !c.keys.some((k) => heads.has(k));
+  }).map((c) => c.name);
+  if (missingCols.length) warnings.push({ code: "template_columns", message: `Your file is missing ${missingCols.length === 1 ? "a column" : "columns"} from the Taxcart template: ${missingCols.join(", ")}. You can still send it, but Taxcart may come back to you about the figures.` });
   if (cols.currency < 0) warnings.push({ code: "no_currency", message: "There is no currency column, so we cannot tell which currency the amounts are in." });
   else if (noCurrency > 0) warnings.push({ code: "blank_currency", message: `${noCurrency} row${noCurrency === 1 ? " has" : "s have"} no currency.` });
   if (totals.size > 1 && cols.currency >= 0) warnings.push({ code: "mixed_currency", message: `The file mixes ${[...totals.keys()].join(", ")}. Totals are shown for each currency separately.` });
@@ -1374,6 +1485,7 @@ var LIMITS = {
   // VAT service: sales-file checks and submissions, replies, and the staff team's day-to-day changes
   vatUpload: { perUser: { limit: 60, windowSeconds: 3600 } },
   vatWrite: { perUser: { limit: 120, windowSeconds: 3600 } },
+  vatInvite: { perUser: { limit: 30, windowSeconds: 3600 } },
   vatStaff: { perUser: { limit: 600, windowSeconds: 3600 } },
   // Document downloads per signed-in user
   download: {
@@ -1548,6 +1660,7 @@ function cleanText(v, max = 2e3) {
   return s;
 }
 var PREPARED = ["return_prepared", "filed", "complete"];
+var NIL_NAME = "No sales this period";
 function mapReturn(r, tenantNames, staff = true) {
   const scheme = String(r["scheme"]);
   return {
@@ -1567,6 +1680,7 @@ function mapReturn(r, tenantNames, staff = true) {
     submittedAt: r["submitted_at"],
     updatedAt: r["updated_at"],
     filedAt: r["filed_at"] ?? null,
+    nil: !r["upload_path"] && r["upload_name"] === NIL_NAME,
     upload: r["upload_path"] ? { name: r["upload_name"], bytes: r["upload_bytes"], rows: r["upload_rows"] } : null,
     returnFile: r["return_path"] && (staff || PREPARED.includes(String(r["status"]))) ? { name: r["return_name"], bytes: r["return_bytes"] } : null
   };
@@ -1795,7 +1909,48 @@ async function submit(request, deps) {
   }
   await deps.serviceDb.from("vat_events").insert({ return_id: returnId, tenant_id: ctx.tenant, actor_id: a.user.id, actor_side: a.user.isStaff && !ctx.behalf ? "staff" : "client", kind: prior ? "file_replaced" : "submitted", body: fileName });
   await audit(deps, { tenantId: ctx.tenant, actorId: a.user.id, action: prior ? "vat.file_replaced" : "vat.submitted", target: `vat_return:${returnId}`, detail: { scheme: ctx.scheme, country: ctx.country, period: ctx.period.code, rows: result.summary.rows, ...ctx.behalf ? { onBehalfOfClient: true } : {} } });
+  if (!a.user.isStaff) await alertStaff(deps, ctx.tenant, `${prior ? "replaced the sales file for" : "uploaded a sales file for"} ${SCHEME_INFO[ctx.scheme].label} ${countryName(ctx.country)} ${periodLabel(ctx.period.code)}`);
   return jsonResponse({ id: returnId, replaced: Boolean(prior), result }, prior ? 200 : 201, { setCookies: a.setCookies });
+}
+async function submitNil(request, deps) {
+  requireMethod(request, "POST");
+  const a = await requireUser(request, deps);
+  if (a instanceof Response) return a;
+  const ctx = await readUploadContext(request, deps, a);
+  await throttle(deps, "vat-upload", a.user.id, LIMITS.vatUpload.perUser);
+  const existing = await deps.serviceDb.from("vat_returns").select("id").eq("tenant_id", ctx.tenant).eq("scheme", ctx.scheme).eq("country", ctx.country).eq("period_code", ctx.period.code).maybeSingle();
+  if (existing.error) throw new Error("could not check existing return");
+  if (existing.data) throw new HttpError(409, "already_received", "Something has already been sent for that period. Please send any changes as a message on the return instead.");
+  const returnId = crypto.randomUUID();
+  const now = deps.now().toISOString();
+  const ins = await deps.serviceDb.from("vat_returns").insert({
+    id: returnId,
+    tenant_id: ctx.tenant,
+    registration_id: ctx.registrationId,
+    scheme: ctx.scheme,
+    country: ctx.country,
+    period_code: ctx.period.code,
+    period_start: ctx.period.start,
+    period_end: ctx.period.end,
+    due_on: defaultDueDate(ctx.scheme, ctx.period),
+    status: "submitted",
+    upload_path: null,
+    upload_name: NIL_NAME,
+    upload_bytes: 0,
+    upload_rows: 0,
+    upload_summary: { nil: true },
+    submitted_by: a.user.id,
+    submitted_at: now,
+    updated_at: now
+  });
+  if (ins.error) {
+    if (ins.error.code === "23505") throw new HttpError(409, "already_received", "Something has just been sent for that period. Please refresh the page.");
+    throw new Error("could not save return");
+  }
+  await deps.serviceDb.from("vat_events").insert({ return_id: returnId, tenant_id: ctx.tenant, actor_id: a.user.id, actor_side: a.user.isStaff && !ctx.behalf ? "staff" : "client", kind: "submitted", body: NIL_NAME });
+  await audit(deps, { tenantId: ctx.tenant, actorId: a.user.id, action: "vat.nil_submitted", target: `vat_return:${returnId}`, detail: { scheme: ctx.scheme, country: ctx.country, period: ctx.period.code, ...ctx.behalf ? { onBehalfOfClient: true } : {} } });
+  if (!a.user.isStaff) await alertStaff(deps, ctx.tenant, `confirmed no sales for ${SCHEME_INFO[ctx.scheme].label} ${countryName(ctx.country)} ${periodLabel(ctx.period.code)}`);
+  return jsonResponse({ id: returnId, nil: true }, 201, { setCookies: a.setCookies });
 }
 async function reply(request, deps) {
   requireMethod(request, "POST");
@@ -1814,6 +1969,7 @@ async function reply(request, deps) {
   if (ins.error) throw new Error("could not save reply");
   if (a.user.isStaff && side === "client") await audit(deps, { tenantId: tenant, actorId: a.user.id, action: "vat.reply_on_behalf", target: `vat_return:${id}` });
   if (side === "client") await deps.serviceDb.from("vat_returns").update({ awaiting_client: false, updated_at: deps.now().toISOString() }).eq("id", id);
+  if (!a.user.isStaff) await alertStaff(deps, tenant, `replied on their ${SCHEME_INFO[String(row["scheme"])]?.label ?? "VAT"} ${countryName(String(row["country"]))} ${periodLabel(String(row["period_code"]))} return`);
   return jsonResponse({ ok: true }, 201, { setCookies: a.setCookies });
 }
 async function queue(request, deps) {
@@ -1974,6 +2130,23 @@ async function unregister(request, deps) {
   await audit(deps, { actorId: s.user.id, action: "vat.registration_removed", target: `vat_registration:${id}` });
   return jsonResponse({ ok: true }, 200, { setCookies: s.setCookies });
 }
+async function alertStaff(deps, tenantId, what) {
+  if (!deps.mailer || !deps.alertTo || !deps.portalUrl) return;
+  try {
+    const t = await deps.serviceDb.from("tenants").select("name").eq("id", tenantId).maybeSingle();
+    const name = str(t.data?.["name"]) || "A client";
+    const ok = await deps.mailer.send(staffAlertEmail({ to: deps.alertTo, subject: `VAT portal: ${name} ${what}`, lines: [`${name} ${what}.`], portalUrl: deps.portalUrl }));
+    if (!ok) deps.log("vat.staff_alert_failed");
+  } catch {
+    deps.log("vat.staff_alert_failed");
+  }
+}
+async function sendWelcome(deps, to, clientName) {
+  if (!deps.mailer || !deps.portalUrl) return "off";
+  const ok = await deps.mailer.send(welcomeEmail({ to, clientName, portalUrl: deps.portalUrl, contact: DEFAULT_REPLY_TO }));
+  if (!ok) deps.log("vat.welcome_email_failed");
+  return ok ? "sent" : "failed";
+}
 async function createClient2(request, deps) {
   requireMethod(request, "POST");
   requireAllowedOrigin(request, deps.config);
@@ -1995,8 +2168,31 @@ async function createClient2(request, deps) {
       invite = link.error ? "failed" : u.created ? "created" : "existing";
     } else invite = "failed";
   }
-  await audit(deps, { tenantId, actorId: s.user.id, action: "vat.client_created", target: `tenant:${tenantId}`, detail: { invited: invite } });
-  return jsonResponse({ client: { id: tenantId, name }, invite }, 201, { setCookies: s.setCookies });
+  const emailed = email && (invite === "created" || invite === "existing") ? await sendWelcome(deps, email, name) : "off";
+  await audit(deps, { tenantId, actorId: s.user.id, action: "vat.client_created", target: `tenant:${tenantId}`, detail: { invited: invite, welcomeEmail: emailed } });
+  return jsonResponse({ client: { id: tenantId, name }, invite, emailed }, 201, { setCookies: s.setCookies });
+}
+async function resendInvite(request, deps) {
+  requireMethod(request, "POST");
+  requireAllowedOrigin(request, deps.config);
+  const s = await requireStaff(request, deps);
+  if (s instanceof Response) return s;
+  await throttle(deps, "vat-invite", s.user.id, LIMITS.vatInvite.perUser);
+  const body = await readJsonObject(request, 4096);
+  const tenantId = str(body["tenantId"]);
+  if (!UUID_RE.test(tenantId)) throw new HttpError(400, "invalid_input", "A valid client is required.");
+  const email = normalizeEmail(body["email"]);
+  if (!deps.mailer) throw new HttpError(409, "emails_off", "Welcome emails are not switched on yet.");
+  const t = await deps.serviceDb.from("tenants").select("id, name").eq("id", tenantId).maybeSingle();
+  const tenant = t.data;
+  if (t.error || !tenant) throw new HttpError(404, "not_found", "Not found.");
+  const u = await deps.auth.ensureUser(email);
+  const m = u ? await deps.serviceDb.from("tenant_members").select("user_id").eq("tenant_id", tenantId).eq("user_id", u.id).maybeSingle() : null;
+  if (!u || !m || m.error || !m.data) throw new HttpError(404, "not_member", "That email does not have access to this client yet. Give them access first.");
+  const emailed = await sendWelcome(deps, email, str(tenant["name"]));
+  await audit(deps, { tenantId, actorId: s.user.id, action: "vat.welcome_resent", target: `user:${u.id}`, detail: { welcomeEmail: emailed } });
+  if (emailed !== "sent") throw new HttpError(502, "email_failed", "The email could not be sent. Please try again shortly.");
+  return jsonResponse({ ok: true }, 200, { setCookies: s.setCookies });
 }
 async function vatRoute(request, deps) {
   try {
@@ -2012,6 +2208,8 @@ async function vatRoute(request, deps) {
         return await check(request, deps);
       case "submit":
         return await submit(request, deps);
+      case "submit-nil":
+        return await submitNil(request, deps);
       case "reply":
         return await reply(request, deps);
       case "queue":
@@ -2030,6 +2228,8 @@ async function vatRoute(request, deps) {
         return await unregister(request, deps);
       case "staff-client":
         return await createClient2(request, deps);
+      case "staff-invite":
+        return await resendInvite(request, deps);
       default:
         return errorResponse(404, "not_found", "Not found.");
     }

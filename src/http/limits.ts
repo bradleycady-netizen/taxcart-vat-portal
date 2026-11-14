@@ -23,6 +23,7 @@ export const LIMITS = {
   // VAT service: sales-file checks and submissions, replies, and the staff team's day-to-day changes
   vatUpload: { perUser: { limit: 60, windowSeconds: 3600 } satisfies Rule },
   vatWrite: { perUser: { limit: 120, windowSeconds: 3600 } satisfies Rule },
+  vatInvite: { perUser: { limit: 30, windowSeconds: 3600 } satisfies Rule },
   vatStaff: { perUser: { limit: 600, windowSeconds: 3600 } satisfies Rule },
   // Document downloads per signed-in user
   download: {
