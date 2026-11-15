@@ -29,7 +29,7 @@ const empty = (title, text) => `<div class="empty"><strong>${esc(title)}</strong
 
 // ------------------------------------------------------------------ brand and shell
 
-const logoBox = '<div class="logo-box"><img src="/vat/taxcart-logo.png" alt="Taxcart: global tax compliance" width="190" height="55"></div>';
+const logoBox = '<div class="logo-box"><span class="lockup" role="img" aria-label="Taxcart: global tax compliance"><svg class="lk-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#2F80FF"/><g transform="translate(2.5 2.5)"><path d="M8 13H14L19 40H48" fill="none" stroke="#FFFFFF" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/><g fill="none" stroke="#FFFFFF" stroke-linecap="round"><circle cx="34" cy="25" r="11.5" stroke-width="3.2"/><ellipse cx="34" cy="25" rx="4.83" ry="11.5" stroke-width="2.3"/><path d="M22.5 25H45.5" stroke-width="2.3"/></g><circle cx="24" cy="48.6" r="4.3" fill="#0B1F4D"/><circle cx="43" cy="48.6" r="4.3" fill="#0B1F4D"/></g></svg><span class="lk-text"><span class="lk-name">Tax<span class="lk-cart">cart</span></span><span class="lk-tag">GLOBAL TAX COMPLIANCE</span></span></span></div>';
 
 export function shell({ nav, who, body, footer = '' }) {
   return `<div class="shell"><aside class="side">${logoBox}${who}<nav aria-label="Main">${nav}</nav><div class="side-foot">${footer}</div></aside><main class="main" id="main" tabindex="-1"><div class="wrap">${body}</div></main></div>`;

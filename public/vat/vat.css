@@ -18,8 +18,8 @@ h1,h2,h3,.hd{font-family:'Plus Jakarta Sans','DM Sans',sans-serif;font-weight:80
 /* shell */
 .shell{display:flex;flex-wrap:wrap;min-height:100vh}
 .side{flex:0 0 272px;background:var(--navy);color:#fff;padding:26px 20px;display:flex;flex-direction:column;gap:22px}
-.logo-box{background:#fff;border-radius:14px;padding:12px 14px;display:flex;align-items:center;justify-content:center}
-.logo-box img{width:190px;max-width:100%;height:auto;display:block}
+.logo-box{display:flex;align-items:center;justify-content:flex-start;padding:2px 4px}
+.lockup{display:flex;align-items:center;gap:11px}.lk-mark{width:46px;height:46px;flex-shrink:0;display:block}.lk-text{display:flex;flex-direction:column;gap:5px}.lk-name{font-family:Sora,'Plus Jakarta Sans',sans-serif;font-weight:600;font-size:31px;letter-spacing:-.03em;line-height:.9;color:#fff}.lk-tag{font-family:Sora,'DM Sans',sans-serif;font-weight:500;font-size:6.6px;letter-spacing:.17em;line-height:1;color:#B7C4E3;white-space:nowrap}
 .who{display:flex;align-items:center;gap:12px;padding:12px;border-radius:12px;background:rgba(255,255,255,.07)}
 .who-mark{width:40px;height:40px;border-radius:10px;background:#fff;color:var(--navy);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;font-family:'Plus Jakarta Sans',sans-serif;flex-shrink:0}
 .who-name{font-size:14.5px;font-weight:700;overflow-wrap:anywhere}
@@ -177,9 +177,9 @@ textarea.field{min-height:92px;resize:vertical}
 
 /* sign in */
 .login{display:flex;flex-wrap:wrap;min-height:100vh}
-.login-art{flex:1 1 600px;min-width:0;background:linear-gradient(160deg,#0B5BE3 0%,#0A47B8 100%);color:#fff;padding:44px 64px 56px;display:flex;flex-direction:column;gap:44px}
-.login-art .logo-box{align-self:flex-start;padding:10px 16px}
-.login-art .logo-box img{width:180px}
+.login-art{flex:1 1 600px;min-width:0;background:linear-gradient(160deg,#12306F 0%,#0B1F4D 100%);color:#fff;padding:44px 64px 56px;display:flex;flex-direction:column;gap:44px}
+.login-art .logo-box{align-self:flex-start;padding:0}
+
 .login-mid{display:flex;flex-wrap:wrap;gap:40px;align-items:center;justify-content:space-between}
 .login-copy{flex:1 1 320px;max-width:470px}
 .login-copy h1{font-size:64px;line-height:1.02}
@@ -221,3 +221,26 @@ textarea.field{min-height:92px;resize:vertical}
 .preview-bar .btn.ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}
 .preview-bar .btn.ghost:hover{background:rgba(255,255,255,.12)}
 .tag.muted{background:#F1F4FA;color:var(--muted)}
+.side .lk-tag{display:none}
+.login-art .lockup{gap:22px}.login-art .lk-mark{width:96px;height:96px}.login-art .lk-text{gap:11px}.login-art .lk-name{font-size:66px}.login-art .lk-tag{font-size:13.4px;letter-spacing:.12em}
+@media (max-width:520px){.login-art .lk-mark{width:68px;height:68px}.login-art .lockup{gap:14px}.login-art .lk-name{font-size:46px}.login-art .lk-tag{font-size:9.4px}}
+.lk-text{display:flex;flex-direction:column;align-items:stretch}
+.lk-tag{width:0;min-width:100%;box-sizing:border-box;white-space:nowrap;text-align:justify;text-align-last:justify;padding-left:.7em}
+.login-art .lk-text{gap:6px}
+.login-art .lk-tag{font-size:13px;letter-spacing:.1em}
+.login-art{gap:64px}
+@media (max-width:520px){.login-art{gap:44px}.login-art .lk-tag{font-size:9.2px}}
+.lk-cart{color:#6FB1FF}
+.lk-text{--fs:31px}.login-art .lk-text{--fs:66px}
+@media (max-width:520px){.login-art .lk-text{--fs:46px}}
+.lk-text .lk-name{font-size:var(--fs)}
+.lk-text .lk-tag{width:auto;min-width:0;font-size:calc(var(--fs) * .2347);letter-spacing:.07em;text-align:left;text-align-last:auto;padding-left:0;white-space:nowrap}
+/* Mid-size screens (laptops): keep the schedule card beside the headline instead of dropping below it. */
+@media (min-width:821px) and (max-width:1500px){
+.login-art{flex:1.5 1 600px;padding-left:48px;padding-right:48px}
+.login-mid{flex-wrap:nowrap;gap:28px}
+.login-copy{flex:1 1 0;max-width:none}
+.login-copy h1{font-size:clamp(40px,3.6vw,52px)}
+.login-copy p{font-size:17px}
+.sched{flex:0 0 300px}
+}
