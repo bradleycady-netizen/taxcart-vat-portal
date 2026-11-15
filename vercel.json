@@ -10,6 +10,18 @@
       "maxDuration": 60
     }
   },
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/vat/",
+      "permanent": false
+    },
+    {
+      "source": "/index.html",
+      "destination": "/vat/",
+      "permanent": false
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

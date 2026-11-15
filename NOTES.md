@@ -63,3 +63,17 @@ How to add a note on github.com without any tools: open this file, click the pen
 - Required columns per Priyank (highlighted in the 54-column MOU template, 16 in total): TYPE, DIGITAL SERVICE, CHANNEL ID, INVOICE NUMBER, VAT COUNTRY, VAT REPORTING DATE, SHIPPING DATE, ARRIVAL COUNTRY, BUYER VAT NUMBER, BUYER VAT NUMBER COUNTRY, DEPARTURE COUNTRY, BUYER BILLING NAME, SKU, ITEM VAT RATE, ITEM GROSS UNIT PRICE, ORIGINAL CURRENCY. Note: ITEM NET PRICE and any quantity column are NOT in the highlighted list, but the site currently reads the amount from ITEM NET PRICE. The Shopify summary template (11 columns) does not contain most of these 16. OPEN: are both layouts accepted, and does Priyank's team convert Shopify files into the MOU layout? Buyer name and buyer VAT number are personal data: raise with the lawyer.
 
 - Decision (Brad, 14 Nov): Priyank's 11-heading template is the standard. Extra columns are fine; if template columns are missing the site flags it (warning naming the missing columns). Date (Day), country (Shipping country) and amount (Net sales) are still required to send a file because the site cannot read it without them. The template is downloadable from the client's upload page. Brad will tell Claude if Priyank wants changes. The 54-column MOU highlighted list is parked for now.
+
+## Logo and colours (Nov 2026)
+- Logo: blue rounded square with a globe riding in a shopping cart (Stef's pick, "option 2"), wordmark "Taxcart" (capital T), two-tone: "Tax" white, "cart" light blue (#6FB1FF) on navy; navy "Tax" and blue "cart" planned for the website. Portal keeps its original blue and navy colours. Earlier T-and-wheel icon dropped.
+- To do: outlined full-logo SVG/PNG files (needs the Sora font file); tell Priyank/Stef.
+
+## Later build: sign-in page wording
+- Stef's point: the sign-in copy says "across the EU and UK". VAT exists in many other countries, so change it to wording like "across the globe" (check it matches what Taxcart actually files before it goes live). Not for now; to do with the later build. Text is in `public/vat/js/views.js` (login panel).
+
+## Global accountant network (Nov 2026)
+- Taxcart is signing agreements with a list of accountants from an EU filing partner: potentially local VAT filing in 70+ countries. Sign-in wording can go to "across the globe" once agreements are in place.
+- To check later: the country list and local-VAT setup in `src/vat/config.ts`; partner accountants receiving client data (privacy, data location, lawyer review, same as the other lawyer items).
+
+- Nov 15 2026: portal address portal.taxcart.com.au is live (CNAME at GoDaddy by Sukesh; APP_ORIGIN and PORTAL_URL set in Vercel). vercel.json now redirects / and /index.html to /vat/ so the unfinished US sales tax page is not reachable; remove the "redirects" block when the sales tax portal is ready. Sign-in layout fixed for laptop widths (vat.css, last block).
+- Nov 15 2026: added link-preview tags and public/vat/og-image.png (1200x630) so WhatsApp/Slack previews show a sharp logo; apple-touch-icon is only 180px.
